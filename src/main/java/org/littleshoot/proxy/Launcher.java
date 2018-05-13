@@ -1,5 +1,9 @@
 package org.littleshoot.proxy;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http.*;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.HelpFormatter;
@@ -15,9 +19,14 @@ import org.littleshoot.proxy.impl.ProxyUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.net.ssl.SSLSession;
 import java.io.File;
 import java.net.InetSocketAddress;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Scanner;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Launches a new HTTP proxy.
@@ -35,14 +44,33 @@ public class Launcher {
     private static final String OPTION_MITM = "mitm";
 
     private static final String OPTION_NIC = "nic";
+    private static AtomicBoolean bool = new AtomicBoolean();
 
     /**
      * Starts the proxy from the command line.
-     * 
+     *
      * @param args
      *            Any command line arguments.
      */
     public static void main(final String... args) {
+
+        new Thread(){
+            @Override
+            public void run() {
+                Scanner scanner = new Scanner(System.in);
+                while (scanner.hasNextLine()){
+                    String s = scanner.nextLine();
+                    if("1".equals(s)){
+                        bool.set(true);
+                    }else{
+                        bool.set(false);
+                    }
+
+                    System.out.println(bool.get());
+                }
+            }
+        }.start();
+
         pollLog4JConfigurationFileIfAvailable();
         LOG.info("Running LittleProxy with args: {}", Arrays.asList(args));
         final Options options = new Options();
@@ -53,7 +81,7 @@ public class Launcher {
         options.addOption(null, OPTION_HELP, false,
                 "Display command line help.");
         options.addOption(null, OPTION_MITM, false, "Run as man in the middle.");
-        
+
         final CommandLineParser parser = new PosixParser();
         final CommandLine cmd;
         try {
@@ -72,7 +100,7 @@ public class Launcher {
             printHelp(options, null);
             return;
         }
-        final int defaultPort = 8080;
+        final int defaultPort = 8888;
         int port;
         if (cmd.hasOption(OPTION_PORT)) {
             final String val = cmd.getOptionValue(OPTION_PORT);
@@ -86,11 +114,43 @@ public class Launcher {
             port = defaultPort;
         }
 
-
         System.out.println("About to start server on port: " + port);
         HttpProxyServerBootstrap bootstrap = DefaultHttpProxyServer
                 .bootstrapFromFile("./littleproxy.properties")
                 .withPort(port)
+                .withFiltersSource(new HttpFiltersSourceAdapter() {
+                    @Override
+                    public int getMaximumResponseBufferSizeInBytes() {
+                        return Integer.MAX_VALUE;
+                    }
+
+                    public HttpFilters filterRequest(HttpRequest originalRequest, ChannelHandlerContext ctx) {
+
+                        return new HttpFiltersAdapter(originalRequest) {
+                            @Override
+                            public HttpObject serverToProxyResponse(HttpObject httpObject) {
+
+                                System.out.println(originalRequest.getUri());
+
+                                FullHttpResponse response = (FullHttpResponse) httpObject;
+
+                                System.out.println(response.headers().get(HttpHeaders.Names.COOKIE));
+                                System.out.println(response.content().toString(Charset.forName("UTF-8")));
+
+                                if(bool.get()){
+                                    String json = "{\"s\":1,\"a\":{\"jingYing\":{\"coin\":{\"next\":0,\"num\":5,\"label\":\"jingying\",\"max\":5},\"food\":{\"next\":0,\"num\":5,\"label\":\"jingying\",\"max\":5},\"army\":{\"next\":0,\"num\":5,\"label\":\"jingying\",\"max\":5}},\"system\":{\"sys\":{\"time\":1526222677}}},\"u\":[]}";
+                                    json = json.replace("1526222677", System.currentTimeMillis()/1000 + "");
+
+                                    ByteBuf bbuf = Unpooled.copiedBuffer(json, StandardCharsets.UTF_8);
+                                    response.headers().set(HttpHeaders.Names.CONTENT_LENGTH, bbuf.readableBytes());
+                                    response.content().clear().writeBytes(bbuf);
+                                }
+                                return super.serverToProxyResponse(httpObject);
+                            }
+
+                        };
+                    }
+                })
                 .withAllowLocalOnly(false);
 
         if (cmd.hasOption(OPTION_NIC)) {
@@ -102,7 +162,7 @@ public class Launcher {
             LOG.info("Running as Man in the Middle");
             bootstrap.withManInTheMiddle(new SelfSignedMitmManager());
         }
-        
+
         if (cmd.hasOption(OPTION_DNSSEC)) {
             final String val = cmd.getOptionValue(OPTION_DNSSEC);
             if (ProxyUtils.isTrue(val)) {
