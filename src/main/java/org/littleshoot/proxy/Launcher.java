@@ -1,5 +1,7 @@
 package org.littleshoot.proxy;
 
+import com.netty.test.Cao;
+import com.netty.test.HttpClient;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
@@ -15,6 +17,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.log4j.xml.DOMConfigurator;
 import org.littleshoot.proxy.extras.SelfSignedMitmManager;
 import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
+import org.littleshoot.proxy.impl.ProxyToServerConnection;
 import org.littleshoot.proxy.impl.ProxyUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,6 +30,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Scanner;
 import java.util.concurrent.atomic.AtomicBoolean;
+
 
 /**
  * Launches a new HTTP proxy.
@@ -52,24 +56,9 @@ public class Launcher {
      * @param args
      *            Any command line arguments.
      */
-    public static void main(final String... args) {
+    public static void main(final String... args) throws Exception {
 
-        new Thread(){
-            @Override
-            public void run() {
-                Scanner scanner = new Scanner(System.in);
-                while (scanner.hasNextLine()){
-                    String s = scanner.nextLine();
-                    if("1".equals(s)){
-                        bool.set(true);
-                    }else{
-                        bool.set(false);
-                    }
-
-                    System.out.println(bool.get());
-                }
-            }
-        }.start();
+        HttpClient.getInstance().newThread();
 
         pollLog4JConfigurationFileIfAvailable();
         LOG.info("Running LittleProxy with args: {}", Arrays.asList(args));
@@ -100,7 +89,7 @@ public class Launcher {
             printHelp(options, null);
             return;
         }
-        final int defaultPort = 8888;
+        final int defaultPort = 8889;
         int port;
         if (cmd.hasOption(OPTION_PORT)) {
             final String val = cmd.getOptionValue(OPTION_PORT);
@@ -118,33 +107,54 @@ public class Launcher {
         HttpProxyServerBootstrap bootstrap = DefaultHttpProxyServer
                 .bootstrapFromFile("./littleproxy.properties")
                 .withPort(port)
+                .plusActivityTracker(new ActivityTrackerAdapter(){
+                    @Override
+                    public void requestReceivedFromClient(FlowContext flowContext, HttpRequest httpRequest) {
+                        System.out.println(httpRequest.getClass() + ":" + httpRequest.getUri());
+                        if( httpRequest instanceof FullHttpRequest){
+                            FullHttpRequest fullHttpRequest = (FullHttpRequest) httpRequest;
+
+                            if(fullHttpRequest.getUri().contains("dushikw.commpad.cn")){
+                                Cao.getInstance().put(httpRequest.headers().get("Cookie"), fullHttpRequest.copy());
+                                System.out.println(fullHttpRequest.getUri() + "存放." + Cao.getInstance().size());
+                            }
+                        }
+
+
+                    }
+                })
                 .withFiltersSource(new HttpFiltersSourceAdapter() {
                     @Override
                     public int getMaximumResponseBufferSizeInBytes() {
                         return Integer.MAX_VALUE;
                     }
 
+                    @Override
+                    public int getMaximumRequestBufferSizeInBytes() {
+                        return Integer.MAX_VALUE;
+                    }
+
                     public HttpFilters filterRequest(HttpRequest originalRequest, ChannelHandlerContext ctx) {
 
-                        return new HttpFiltersAdapter(originalRequest) {
+                        return new HttpFiltersAdapter(originalRequest, ctx) {
+
                             @Override
                             public HttpObject serverToProxyResponse(HttpObject httpObject) {
+//                                http://dushikw.commpad.cn/servers/s1.php?sevid=1&ver=V1.0.29&uid=1001982&token=cfbc0c4ac24f4d5432f85bf29b6a8285&platform=kuaiwanioszcqsz&lang=zh-cn
 
-                                System.out.println(originalRequest.getUri());
-
-                                FullHttpResponse response = (FullHttpResponse) httpObject;
-
-                                System.out.println(response.headers().get(HttpHeaders.Names.COOKIE));
-                                System.out.println(response.content().toString(Charset.forName("UTF-8")));
-
-                                if(bool.get()){
-                                    String json = "{\"s\":1,\"a\":{\"jingYing\":{\"coin\":{\"next\":0,\"num\":5,\"label\":\"jingying\",\"max\":5},\"food\":{\"next\":0,\"num\":5,\"label\":\"jingying\",\"max\":5},\"army\":{\"next\":0,\"num\":5,\"label\":\"jingying\",\"max\":5}},\"system\":{\"sys\":{\"time\":1526222677}}},\"u\":[]}";
-                                    json = json.replace("1526222677", System.currentTimeMillis()/1000 + "");
-
-                                    ByteBuf bbuf = Unpooled.copiedBuffer(json, StandardCharsets.UTF_8);
-                                    response.headers().set(HttpHeaders.Names.CONTENT_LENGTH, bbuf.readableBytes());
-                                    response.content().clear().writeBytes(bbuf);
-                                }
+//                                FullHttpResponse response = (FullHttpResponse) httpObject;
+//
+//                                System.out.println(response.headers().get(HttpHeaders.Names.COOKIE));
+//                                System.out.println(response.content().toString(Charset.forName("UTF-8")));
+//
+//                                if(bool.get()){
+//                                    String json = "{\"s\":1,\"a\":{\"jingYing\":{\"coin\":{\"next\":0,\"num\":5,\"label\":\"jingying\",\"max\":5},\"food\":{\"next\":0,\"num\":5,\"label\":\"jingying\",\"max\":5},\"army\":{\"next\":0,\"num\":5,\"label\":\"jingying\",\"max\":5}},\"system\":{\"sys\":{\"time\":1526222677}}},\"u\":[]}";
+//                                    json = json.replace("1526222677", System.currentTimeMillis()/1000 + "");
+//
+//                                    ByteBuf bbuf = Unpooled.copiedBuffer(json, StandardCharsets.UTF_8);
+//                                    response.headers().set(HttpHeaders.Names.CONTENT_LENGTH, bbuf.readableBytes());
+//                                    response.content().clear().writeBytes(bbuf);
+//                                }
                                 return super.serverToProxyResponse(httpObject);
                             }
 
